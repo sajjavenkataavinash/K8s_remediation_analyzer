@@ -1,0 +1,30 @@
+{
+  "id": "oomkilled",
+  "label": "OOMKilled",
+  "description": "ML inference container exceeds memory limits during batch processing",
+  "event": {
+    "type": "OOMKilled",
+    "namespace": "production",
+    "pod": "ml-inference-5f8d9a7b2-q9r3n",
+    "container": "ml-inference",
+    "cluster": "us-west-2-prod",
+    "node": "ip-10-0-7-88.ec2.internal",
+    "restartCount": 3,
+    "exitCode": 137,
+    "age": "12m"
+  },
+  "analysis": {
+    "root_cause": {
+      "summary": "ML model weights consume 1.9GB at rest, leaving only ~100MB headroom. Concurrent batch requests push memory beyond the 2Gi container limit.",
+      "confidence": "high",
+      "severity": "critical"
+    },
+    "evidence_count": 4,
+    "hypotheses_tested": 4,
+    "hypotheses_validated": 2,
+    "hypotheses_invalidated": 1,
+    "hypotheses_inconclusive": 1,
+    "remediation_risk": "low",
+    "timeline_estimate": "5 minutes for limit increase"
+  }
+}

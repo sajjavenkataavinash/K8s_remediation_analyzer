@@ -1,0 +1,30 @@
+{
+  "id": "imagepull",
+  "label": "ImagePullBackOff",
+  "description": "Container image tag not found in registry due to CI/CD pipeline failure",
+  "event": {
+    "type": "ImagePullBackOff",
+    "namespace": "staging",
+    "pod": "checkout-service-6c4a9d8e1-h7j2p",
+    "container": "checkout-service",
+    "cluster": "us-east-1-staging",
+    "node": "ip-10-0-2-55.ec2.internal",
+    "restartCount": 0,
+    "exitCode": null,
+    "age": "8m"
+  },
+  "analysis": {
+    "root_cause": {
+      "summary": "Image tag v1.9.3-rc2 does not exist in Google Artifact Registry. The CI/CD pipeline likely failed to push this image before deployment.",
+      "confidence": "high",
+      "severity": "warning"
+    },
+    "evidence_count": 4,
+    "hypotheses_tested": 4,
+    "hypotheses_validated": 2,
+    "hypotheses_invalidated": 1,
+    "hypotheses_inconclusive": 1,
+    "remediation_risk": "low",
+    "timeline_estimate": "5 min for rollback"
+  }
+}

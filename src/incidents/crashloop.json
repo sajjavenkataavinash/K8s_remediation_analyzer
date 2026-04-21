@@ -1,0 +1,30 @@
+{
+  "id": "crashloop",
+  "label": "CrashLoopBackOff",
+  "description": "Container crashes repeatedly on startup due to database connectivity failure",
+  "event": {
+    "type": "CrashLoopBackOff",
+    "namespace": "production",
+    "pod": "api-gateway-7d4b8c6f9-x2k4m",
+    "container": "api-gateway",
+    "cluster": "us-east-1-prod",
+    "node": "ip-10-0-3-142.ec2.internal",
+    "restartCount": 14,
+    "exitCode": 1,
+    "age": "23m"
+  },
+  "analysis": {
+    "root_cause": {
+      "summary": "Container cannot connect to PostgreSQL database service db-primary on port 5432, causing the application to crash on startup.",
+      "confidence": "high",
+      "severity": "critical"
+    },
+    "evidence_count": 4,
+    "hypotheses_tested": 4,
+    "hypotheses_validated": 1,
+    "hypotheses_invalidated": 2,
+    "hypotheses_inconclusive": 1,
+    "remediation_risk": "low",
+    "timeline_estimate": "5-15 minutes"
+  }
+}
