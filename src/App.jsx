@@ -4,6 +4,12 @@ const SAMPLE_INCIDENTS = [
   {
     id: "crashloop",
     label: "CrashLoopBackOff",
+    datadogAlert: {
+      monitor: "api-gateway · Container Restart Rate",
+      severity: "P1",
+      triggered: "26 min ago",
+      value: "14 restarts in 23m  ·  threshold: > 3"
+    },
     event: {
       type: "CrashLoopBackOff", namespace: "production", pod: "api-gateway-7d4b8c6f9-x2k4m",
       container: "api-gateway", cluster: "us-east-1-prod", node: "ip-10-0-3-142.ec2.internal",
@@ -14,6 +20,12 @@ const SAMPLE_INCIDENTS = [
     },
     analysis: {
       root_cause: { summary: "Container cannot connect to PostgreSQL database service db-primary on port 5432, causing the application to crash on startup.", detailed_explanation: "The container logs show repeated 'Connection refused' errors when attempting to connect to postgres://db-primary:5432/apidb. After exhausting retry attempts, the process exits with code 1, triggering Kubernetes to restart the container. With 14 restarts in 23 minutes, the pod is now in CrashLoopBackOff with increasing backoff delays.", confidence: "high", severity: "critical" },
+      auto_remediation: {
+        verdict: "manual",
+        confidence: "high",
+        reasoning: "Database root cause requires human validation before any automated action. Auto-restarting the pod would cause repeated crashes and risk masking a deeper data layer issue. An on-call SRE must verify db-primary health first.",
+        suggested_action: "Page on-call SRE · Open guided runbook"
+      },
       evidence: [
         { signal: "Exit code 1 with FATAL: Max retries exceeded", interpretation: "Application has a hard dependency on database connectivity at startup and crashes deterministically when it fails" },
         { signal: "14 restarts in 23 minutes", interpretation: "The issue is persistent, not transient — the database service has been unreachable for the entire duration" },
@@ -29,7 +41,7 @@ const SAMPLE_INCIDENTS = [
       remediation: {
         immediate: { action: "Check if the database service and pod are running. If down, restart the database deployment.", command: "kubectl get pods -n production -l app=db-primary && kubectl get svc db-primary -n production", risk: "low" },
         permanent_fix: { action: "Add a startup probe with graceful retry logic so the container waits for database availability instead of crashing.", changes: "Add to container spec:\n  startupProbe:\n    tcpSocket:\n      port: 5432\n    failureThreshold: 30\n    periodSeconds: 10\n\nOr add init container:\n  initContainers:\n  - name: wait-for-db\n    image: busybox\n    command: ['sh', '-c', 'until nc -z db-primary 5432; do sleep 2; done']" },
-        prevention: "Implement circuit breaker pattern for database connections. Add PodDisruptionBudgets for the database. Set up monitors on database pod availability."
+        prevention: "Implement circuit breaker pattern for database connections. Add PodDisruptionBudgets for the database. Set up Datadog monitors on database pod availability with escalation to on-call."
       },
       affected_services: ["api-gateway (3 replicas affected)", "Upstream services routing to api-gateway", "End users hitting API endpoints"],
       timeline_estimate: "5-15 min if database needs restart; 30-60 min if data corruption"
@@ -38,6 +50,12 @@ const SAMPLE_INCIDENTS = [
   {
     id: "oomkilled",
     label: "OOMKilled",
+    datadogAlert: {
+      monitor: "ml-inference · Memory Utilization",
+      severity: "P2",
+      triggered: "14 min ago",
+      value: "98% of 2Gi limit  ·  threshold: > 85%"
+    },
     event: {
       type: "OOMKilled", namespace: "production", pod: "ml-inference-5f8d9a7b2-q9r3n",
       container: "ml-inference", cluster: "us-west-2-prod", node: "ip-10-0-7-88.ec2.internal",
@@ -48,6 +66,12 @@ const SAMPLE_INCIDENTS = [
     },
     analysis: {
       root_cause: { summary: "ML model weights consume 1.9GB at rest, leaving only ~100MB headroom. Concurrent batch requests push memory beyond the 2Gi container limit.", detailed_explanation: "The recommendation model v3.bin requires 1.8GB to load, and after initialization the container sits at 1.9GB — already 95% of the 2Gi limit. When batch inference requests arrive (250-300 items), the additional memory for tensor operations and request buffers exceeds the limit. The kernel OOM killer terminates the process with signal 9 (exit code 137).", confidence: "high", severity: "critical" },
+      auto_remediation: {
+        verdict: "auto",
+        confidence: "high",
+        reasoning: "Memory limit increase is a well-understood, reversible, low-risk operation. This OOM pattern matches 3 prior incidents in the last 90 days with identical successful fixes. Safe to execute without human approval.",
+        suggested_action: "Auto-apply: kubectl set resources deployment/ml-inference --limits=memory=4Gi"
+      },
       evidence: [
         { signal: "Model file is 1.8GB, post-load memory is 1.9GB", interpretation: "Base memory footprint leaves no room for inference workload" },
         { signal: "Memory at 92% before second batch request", interpretation: "First batch pushed memory close to limit; second batch was the tipping point" },
@@ -63,7 +87,7 @@ const SAMPLE_INCIDENTS = [
       remediation: {
         immediate: { action: "Increase container memory limit to 4Gi to provide headroom for model + inference.", command: "kubectl set resources deployment/ml-inference -n production --limits=memory=4Gi --requests=memory=3Gi", risk: "low" },
         permanent_fix: { action: "Right-size memory based on profiled workload. Implement batch size limits. Consider model quantization.", changes: "Update deployment manifest:\n  resources:\n    requests:\n      memory: \"3Gi\"  # was 1Gi\n    limits:\n      memory: \"4Gi\"  # was 2Gi\n\nAdd to app config:\n  MAX_BATCH_SIZE: 100\n  MEMORY_WATCHDOG: true" },
-        prevention: "Set up memory usage monitors with warning at 80% of limit. Implement VPA recommendations. Add app-level memory guards that reject requests near limits."
+        prevention: "Set up Datadog memory monitors with warning at 80% of limit. Implement VPA recommendations. Add app-level memory guards that reject requests near limits."
       },
       affected_services: ["ml-inference (1 of 2 replicas down)", "Recommendation API consumers", "Product pages depending on recommendations"],
       timeline_estimate: "5 min for limit increase; 1-2 hours for batch tuning"
@@ -72,6 +96,12 @@ const SAMPLE_INCIDENTS = [
   {
     id: "imagepull",
     label: "ImagePullBackOff",
+    datadogAlert: {
+      monitor: "checkout-service · Pod Availability",
+      severity: "P2",
+      triggered: "10 min ago",
+      value: "0/1 pods ready  ·  threshold: < 1"
+    },
     event: {
       type: "ImagePullBackOff", namespace: "staging", pod: "checkout-service-6c4a9d8e1-h7j2p",
       container: "checkout-service", cluster: "us-east-1-staging", node: "ip-10-0-2-55.ec2.internal",
@@ -82,6 +112,12 @@ const SAMPLE_INCIDENTS = [
     },
     analysis: {
       root_cause: { summary: "Image tag v1.9.3-rc2 does not exist in Google Artifact Registry. The CI/CD pipeline likely failed to push this image before deployment.", detailed_explanation: "The Kubernetes event shows 'manifest not found' when pulling from Artifact Registry, meaning the repository exists but the specific tag v1.9.3-rc2 is not present. The '-rc2' suffix suggests a release candidate that may not have passed CI checks. This commonly occurs when a deployment is triggered before the CI build completes.", confidence: "high", severity: "warning" },
+      auto_remediation: {
+        verdict: "auto",
+        confidence: "medium",
+        reasoning: "Image rollback to last verified stable tag (v1.9.2) is safe in staging — no data mutation, no production impact. CI/CD team notified automatically. Human review required before promoting any fix to production.",
+        suggested_action: "Auto-rollback to v1.9.2 · Notify CI/CD team · Block prod promotion"
+      },
       evidence: [
         { signal: "Error: manifest not found (not 'access denied')", interpretation: "Registry auth is working (imagePullSecrets valid), but the specific tag doesn't exist" },
         { signal: "Tag is v1.9.3-rc2 (release candidate)", interpretation: "RC tags are built by CI pipelines. The pipeline may have failed or tag was never pushed" },
@@ -97,7 +133,7 @@ const SAMPLE_INCIDENTS = [
       remediation: {
         immediate: { action: "Verify the image exists. If not, roll back to last known good tag.", command: "gcloud artifacts docker images list us-east1-docker.pkg.dev/myproject/services/checkout-service --include-tags | grep v1.9", risk: "low" },
         permanent_fix: { action: "Add image existence verification as a gate in the deployment pipeline.", changes: "Add CI step before deploy:\n  - name: verify-image\n    run: |\n      gcloud artifacts docker images describe \\\n        $REGISTRY/checkout-service:$TAG || exit 1\n\nOr rollback now:\n  kubectl set image deployment/checkout-service \\\n    checkout-service=$REGISTRY/checkout-service:v1.9.2 \\\n    -n staging" },
-        prevention: "Implement image promotion workflow: images verified in staging registry before deployment manifests reference them. Add monitor on ImagePullBackOff events."
+        prevention: "Implement image promotion workflow: images verified in staging registry before deployment manifests reference them. Add Datadog monitor on ImagePullBackOff events."
       },
       affected_services: ["checkout-service (staging — 0/1 ready)", "Staging integration tests", "QA team blocked on release validation"],
       timeline_estimate: "5 min for rollback; 15-30 min to rebuild and push RC"
@@ -144,6 +180,48 @@ const TypewriterText = ({ text, speed = 5, onComplete }) => {
   return <span>{shown}</span>;
 };
 
+const DatadogAlertBanner = ({ alert }) => {
+  const severityColor = { P1: { bg: "#3d0a0a", border: "#7a1a1a", badge: "#dc2626", text: "#fca5a5" }, P2: { bg: "#3d2e0a", border: "#7a5a1a", badge: "#d97706", text: "#fde68a" }, P3: { bg: "#1a1a3d", border: "#3a3a7a", badge: "#4f46e5", text: "#a5b4fc" } }[alert.severity] || { bg: "#1a1a3d", border: "#3a3a7a", badge: "#4f46e5", text: "#a5b4fc" };
+  return (
+    <div style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 14px", background: severityColor.bg, border: `1px solid ${severityColor.border}`, borderRadius: 8, marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, marginTop: 1 }}>
+        <div style={{ width: 7, height: 7, borderRadius: "50%", background: severityColor.badge, boxShadow: `0 0 6px ${severityColor.badge}` }} />
+        <span style={{ fontSize: 10, fontWeight: 700, color: severityColor.badge, letterSpacing: "0.04em" }}>DATADOG ALERT</span>
+        <span style={{ background: severityColor.badge, color: "#fff", fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 3 }}>{alert.severity}</span>
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ color: severityColor.text, fontSize: 12, fontWeight: 600, marginBottom: 2 }}>{alert.monitor}</div>
+        <div style={{ color: "#94a3b8", fontSize: 11 }}>{alert.value} &nbsp;·&nbsp; triggered {alert.triggered}</div>
+      </div>
+    </div>
+  );
+};
+
+const AutoRemediationCard = ({ ar }) => {
+  const isAuto = ar.verdict === "auto";
+  const cfg = isAuto
+    ? { bg: "#0a1f0a", border: "#1a4a1a", accent: "#4ade80", label: "AUTO-REMEDIATE", icon: "⚡", desc: "AI will execute remediation automatically" }
+    : { bg: "#1f1a0a", border: "#4a3a1a", accent: "#facc15", label: "MANUAL REVIEW", icon: "👤", desc: "Human approval required before action" };
+  const confColor = { high: "#4ade80", medium: "#facc15", low: "#f87171" }[ar.confidence] || "#facc15";
+  return (
+    <div style={{ background: cfg.bg, border: `1px solid ${cfg.border}`, borderRadius: 8, padding: 14, marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 15 }}>{cfg.icon}</span>
+        <span style={{ fontWeight: 700, color: cfg.accent, fontSize: 13, letterSpacing: "0.03em" }}>{cfg.label}</span>
+        <span style={{ fontSize: 10, color: confColor, background: "#12121e", border: `1px solid ${confColor}33`, padding: "2px 7px", borderRadius: 4, fontWeight: 600 }}>
+          {ar.confidence.toUpperCase()} CONFIDENCE
+        </span>
+        <span style={{ fontSize: 10, color: "#64748b", marginLeft: "auto" }}>{cfg.desc}</span>
+      </div>
+      <div style={{ color: "#cbd5e1", fontSize: 12, lineHeight: 1.55, marginBottom: 10 }}>{ar.reasoning}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 10px", background: "#12121e", borderRadius: 6, border: "1px solid #2a2a3a" }}>
+        <span style={{ fontSize: 11 }}>→</span>
+        <span style={{ color: cfg.accent, fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{ar.suggested_action}</span>
+      </div>
+    </div>
+  );
+};
+
 export default function App() {
   const [sel, setSel] = useState(null);
   const [analysis, setAnalysis] = useState(null);
@@ -154,13 +232,12 @@ export default function App() {
 
   const analyze = async (inc) => {
     setSel(inc); setLoading(true); setAnalysis(null); setTab("overview"); setPhase(0); setSrc("");
-    // Try live API, silently fall back to pre-computed
     let result = null, source = "pre-computed";
     try {
       const r = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 2048,
-          messages: [{ role: "user", content: `You are a K8s SRE. Analyze: ${inc.event.type} pod ${inc.event.pod}. Logs: ${inc.event.logs}. Events: ${inc.event.events}. Manifest: ${inc.event.manifest}. Respond ONLY with JSON: {"root_cause":{"summary":"","detailed_explanation":"","confidence":"high","severity":"critical"},"evidence":[{"signal":"","interpretation":""}],"hypotheses":[{"hypothesis":"","status":"validated","reasoning":""}],"remediation":{"immediate":{"action":"","command":"","risk":"low"},"permanent_fix":{"action":"","changes":""},"prevention":""},"affected_services":[""],"timeline_estimate":""}` }]
+          messages: [{ role: "user", content: `You are a K8s SRE. Analyze: ${inc.event.type} pod ${inc.event.pod}. Logs: ${inc.event.logs}. Events: ${inc.event.events}. Manifest: ${inc.event.manifest}. Respond ONLY with JSON: {"root_cause":{"summary":"","detailed_explanation":"","confidence":"high","severity":"critical"},"auto_remediation":{"verdict":"manual","confidence":"high","reasoning":"","suggested_action":""},"evidence":[{"signal":"","interpretation":""}],"hypotheses":[{"hypothesis":"","status":"validated","reasoning":""}],"remediation":{"immediate":{"action":"","command":"","risk":"low"},"permanent_fix":{"action":"","changes":""},"prevention":""},"affected_services":[""],"timeline_estimate":""}` }]
         })
       });
       const d = await r.json();
@@ -179,16 +256,20 @@ export default function App() {
     <div style={{ fontFamily: "'IBM Plex Sans', -apple-system, sans-serif", background: "#0d0d1a", color: "#e2e8f0", minHeight: "100vh", maxWidth: 720, margin: "0 auto", padding: "20px 16px" }}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');*{box-sizing:border-box}::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-track{background:#12121e}::-webkit-scrollbar-thumb{background:#2a2a3a;border-radius:3px}@keyframes spin{to{transform:rotate(360deg)}}`}</style>
 
+      {/* Header */}
       <div style={{ marginBottom: 24 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
           <div style={{ width: 32, height: 32, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(135deg, #6366f1, #8b5cf6)", fontSize: 16 }}>☸</div>
           <h1 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: "#f1f5f9" }}>K8s Remediation Analyzer</h1>
         </div>
-        <p style={{ fontSize: 12, color: "#64748b", margin: 0, paddingLeft: 42 }}>AI-powered root cause analysis and guided remediation for Kubernetes incidents</p>
+        <p style={{ fontSize: 12, color: "#64748b", margin: 0, paddingLeft: 42 }}>
+          Concept prototype · AI-powered root cause analysis and auto-remediation decisions for Kubernetes incidents
+        </p>
       </div>
 
+      {/* Incident selector */}
       <div style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.05em" }}>Select incident to analyze</div>
+        <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.05em" }}>Select an incident to analyze</div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {SAMPLE_INCIDENTS.map(inc => {
             const isSel = sel?.id === inc.id;
@@ -198,95 +279,174 @@ export default function App() {
         </div>
       </div>
 
+      {/* Datadog alert banner — visible as soon as incident is selected */}
+      {sel && !loading && <DatadogAlertBanner alert={sel.datadogAlert} />}
+      {sel && loading && <DatadogAlertBanner alert={sel.datadogAlert} />}
+
+      {/* Pod metadata bar */}
       {sel && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(90px, 1fr))", gap: 8, padding: 12, background: "#1a1a2e", borderRadius: 8, border: "1px solid #2a2a3a", marginBottom: 16 }}>
-          {[{ l: "Pod", v: sel.event.pod.split("-").slice(0, 2).join("-") }, { l: "Namespace", v: sel.event.namespace }, { l: "Restarts", v: sel.event.restartCount }, { l: "Age", v: sel.event.age }, { l: "Exit", v: sel.event.exitCode ?? "N/A" }].map((x, i) => (
+          {[{ l: "Pod", v: sel.event.pod.split("-").slice(0, 2).join("-") }, { l: "Namespace", v: sel.event.namespace }, { l: "Restarts", v: sel.event.restartCount }, { l: "Age", v: sel.event.age }, { l: "Exit Code", v: sel.event.exitCode ?? "N/A" }].map((x, i) => (
             <div key={i} style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", marginBottom: 2 }}>{x.l}</div><div style={{ fontSize: 12, color: "#e2e8f0", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{x.v}</div></div>
           ))}
         </div>
       )}
 
+      {/* Loading state */}
       {loading && (
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "60px 20px", gap: 20 }}>
           <div style={{ width: 48, height: 48, border: "3px solid #2a2a3a", borderTopColor: "#818cf8", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
-          <div style={{ color: "#94a3b8", fontSize: 13, textAlign: "center" }}><div style={{ fontWeight: 600, color: "#c4b5fd", marginBottom: 4 }}>Analyzing incident telemetry...</div><div>Correlating logs, events, and manifest</div></div>
+          <div style={{ color: "#94a3b8", fontSize: 13, textAlign: "center" }}>
+            <div style={{ fontWeight: 600, color: "#c4b5fd", marginBottom: 4 }}>Analyzing incident telemetry...</div>
+            <div>Correlating logs, events, and manifest</div>
+          </div>
         </div>
       )}
 
+      {/* Analysis output */}
       {analysis && !loading && (<>
-        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
           <span style={{ fontSize: 10, color: src === "live AI" ? "#4ade80" : "#818cf8", background: src === "live AI" ? "#0a3d1a" : "#1a1a3d", border: `1px solid ${src === "live AI" ? "#1a7a3a" : "#3a3a7a"}`, padding: "2px 8px", borderRadius: 4, fontWeight: 600 }}>
             {src === "live AI" ? "⚡ Live AI" : "📦 Pre-computed Analysis"}
           </span>
         </div>
 
+        {/* Auto-remediation decision — shown before tabs so it's always visible */}
+        {analysis.auto_remediation && <AutoRemediationCard ar={analysis.auto_remediation} />}
+
+        {/* Tab bar */}
         <div style={{ display: "flex", gap: 2, marginBottom: 16, background: "#1a1a2e", borderRadius: 8, padding: 3 }}>
           {tabs.map(t => (<button key={t.id} onClick={() => setTab(t.id)} style={{ flex: 1, padding: "8px 12px", borderRadius: 6, border: "none", background: tab === t.id ? "#2a2a4a" : "transparent", color: tab === t.id ? "#e2e8f0" : "#64748b", cursor: "pointer", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}><span>{t.i}</span>{t.l}</button>))}
         </div>
 
+        {/* Root Cause tab */}
         {tab === "overview" && (<div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div style={{ background: "#1a1a2e", border: "1px solid #2a2a3a", borderRadius: 8, padding: 16 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 16 }}>🔍</span><span style={{ fontWeight: 700, fontSize: 14 }}>Root Cause Analysis</span>
-              <ConfidenceBadge level={analysis.root_cause.confidence} /><SeverityBadge severity={analysis.root_cause.severity} />
+              <span style={{ fontSize: 16 }}>🔍</span>
+              <span style={{ fontWeight: 700, fontSize: 14 }}>Root Cause Analysis</span>
+              <ConfidenceBadge level={analysis.root_cause.confidence} />
+              <SeverityBadge severity={analysis.root_cause.severity} />
             </div>
-            <div style={{ color: "#f1f5f9", fontSize: 14, fontWeight: 600, marginBottom: 6, lineHeight: 1.4 }}><TypewriterText text={analysis.root_cause.summary} speed={8} /></div>
-            <div style={{ color: "#94a3b8", fontSize: 13, lineHeight: 1.5 }}>{phase >= 1 && <TypewriterText text={analysis.root_cause.detailed_explanation} speed={5} onComplete={() => setPhase(2)} />}</div>
+            <div style={{ color: "#f1f5f9", fontSize: 14, fontWeight: 600, marginBottom: 6, lineHeight: 1.4 }}>
+              <TypewriterText text={analysis.root_cause.summary} speed={8} />
+            </div>
+            <div style={{ color: "#94a3b8", fontSize: 13, lineHeight: 1.5 }}>
+              {phase >= 1 && <TypewriterText text={analysis.root_cause.detailed_explanation} speed={5} onComplete={() => setPhase(2)} />}
+            </div>
           </div>
-          {phase >= 2 && <Section title="Evidence Signals" icon="📊"><div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {(analysis.evidence || []).map((e, i) => (<div key={i} style={{ padding: "8px 10px", background: "#161625", borderRadius: 6, borderLeft: "3px solid #818cf8" }}>
-              <div style={{ color: "#c4b5fd", fontSize: 11, fontWeight: 600, marginBottom: 2 }}>SIGNAL</div>
-              <div style={{ color: "#e2e8f0", fontSize: 13, marginBottom: 6 }}>{e.signal}</div>
-              <div style={{ color: "#86efac", fontSize: 11, fontWeight: 600, marginBottom: 2 }}>INTERPRETATION</div>
-              <div style={{ color: "#e2e8f0", fontSize: 13 }}>{e.interpretation}</div>
-            </div>))}
-          </div></Section>}
-          {phase >= 2 && <Section title="Hypotheses Tested" icon="🧪"><div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {(analysis.hypotheses || []).map((h, i) => { const s = statusCfg[h.status] || statusCfg.inconclusive; return (
-              <div key={i} style={{ padding: "8px 10px", background: "#161625", borderRadius: 6 }}>
-                <div style={{ display: "flex", alignItems: "flex-start", gap: 6, marginBottom: 4 }}>
-                  <span style={{ flexShrink: 0 }}>{s.i}</span><span style={{ color: "#e2e8f0", fontSize: 13, fontWeight: 600, flex: 1 }}>{h.hypothesis}</span>
-                  <span style={{ color: s.c, fontSize: 10, fontWeight: 600, flexShrink: 0 }}>{(h.status || "").toUpperCase()}</span>
+
+          {phase >= 2 && <Section title="Evidence Signals" icon="📊">
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {(analysis.evidence || []).map((e, i) => (
+                <div key={i} style={{ padding: "8px 10px", background: "#161625", borderRadius: 6, borderLeft: "3px solid #818cf8" }}>
+                  <div style={{ color: "#c4b5fd", fontSize: 11, fontWeight: 600, marginBottom: 2 }}>SIGNAL</div>
+                  <div style={{ color: "#e2e8f0", fontSize: 13, marginBottom: 6 }}>{e.signal}</div>
+                  <div style={{ color: "#86efac", fontSize: 11, fontWeight: 600, marginBottom: 2 }}>INTERPRETATION</div>
+                  <div style={{ color: "#e2e8f0", fontSize: 13 }}>{e.interpretation}</div>
                 </div>
-                <div style={{ color: "#94a3b8", fontSize: 12, paddingLeft: 22 }}>{h.reasoning}</div>
-              </div>);
-            })}
-          </div></Section>}
+              ))}
+            </div>
+          </Section>}
+
+          {phase >= 2 && <Section title="Hypotheses Tested" icon="🧪">
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {(analysis.hypotheses || []).map((h, i) => {
+                const s = statusCfg[h.status] || statusCfg.inconclusive;
+                return (
+                  <div key={i} style={{ padding: "8px 10px", background: "#161625", borderRadius: 6 }}>
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: 6, marginBottom: 4 }}>
+                      <span style={{ flexShrink: 0 }}>{s.i}</span>
+                      <span style={{ color: "#e2e8f0", fontSize: 13, fontWeight: 600, flex: 1 }}>{h.hypothesis}</span>
+                      <span style={{ color: s.c, fontSize: 10, fontWeight: 600, flexShrink: 0 }}>{(h.status || "").toUpperCase()}</span>
+                    </div>
+                    <div style={{ color: "#94a3b8", fontSize: 12, paddingLeft: 22 }}>{h.reasoning}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </Section>}
+
+          {phase >= 2 && analysis.affected_services?.length > 0 && (
+            <Section title="Affected Services" icon="🔗" defaultOpen={false}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {analysis.affected_services.map((s, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: "#161625", borderRadius: 6 }}>
+                    <span style={{ color: "#f87171", fontSize: 10 }}>●</span>
+                    <span style={{ color: "#e2e8f0", fontSize: 13 }}>{s}</span>
+                  </div>
+                ))}
+              </div>
+            </Section>
+          )}
         </div>)}
 
+        {/* Remediation tab */}
         {tab === "remediation" && analysis.remediation && (<div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div style={{ background: "#0a1a0a", border: "1px solid #1a3a1a", borderRadius: 8, padding: 16 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-              <span style={{ fontSize: 16 }}>⚡</span><span style={{ fontWeight: 700, color: "#4ade80", fontSize: 14 }}>Immediate Action</span>
+              <span style={{ fontSize: 16 }}>⚡</span>
+              <span style={{ fontWeight: 700, color: "#4ade80", fontSize: 14 }}>Immediate Action</span>
               {analysis.remediation.immediate?.risk && <span style={{ fontSize: 11, color: riskColor[analysis.remediation.immediate.risk], background: "#1a1a2e", padding: "2px 6px", borderRadius: 4 }}>Risk: {analysis.remediation.immediate.risk.toUpperCase()}</span>}
             </div>
             <div style={{ color: "#e2e8f0", fontSize: 13, marginBottom: 10 }}>{analysis.remediation.immediate?.action}</div>
-            {analysis.remediation.immediate?.command && <pre style={{ background: "#0d0d1a", border: "1px solid #2a2a3a", borderRadius: 6, padding: 12, color: "#a5f3fc", fontSize: 11, fontFamily: "'JetBrains Mono', monospace", overflowX: "auto", margin: 0, lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-all" }}><span style={{ color: "#64748b" }}>$ </span>{analysis.remediation.immediate.command}</pre>}
+            {analysis.remediation.immediate?.command && (
+              <pre style={{ background: "#0d0d1a", border: "1px solid #2a2a3a", borderRadius: 6, padding: 12, color: "#a5f3fc", fontSize: 11, fontFamily: "'JetBrains Mono', monospace", overflowX: "auto", margin: 0, lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                <span style={{ color: "#64748b" }}>$ </span>{analysis.remediation.immediate.command}
+              </pre>
+            )}
           </div>
+
           <div style={{ background: "#1a1a2e", border: "1px solid #2a2a3a", borderRadius: 8, padding: 16 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><span style={{ fontSize: 16 }}>🔧</span><span style={{ fontWeight: 700, color: "#818cf8", fontSize: 14 }}>Permanent Fix</span></div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+              <span style={{ fontSize: 16 }}>🔧</span>
+              <span style={{ fontWeight: 700, color: "#818cf8", fontSize: 14 }}>Permanent Fix</span>
+            </div>
             <div style={{ color: "#e2e8f0", fontSize: 13, marginBottom: 8 }}>{analysis.remediation.permanent_fix?.action}</div>
-            {analysis.remediation.permanent_fix?.changes && <pre style={{ background: "#0d0d1a", border: "1px solid #2a2a3a", borderRadius: 6, padding: 12, color: "#fde68a", fontSize: 11, fontFamily: "'JetBrains Mono', monospace", whiteSpace: "pre-wrap", lineHeight: 1.5, margin: 0, wordBreak: "break-all" }}>{analysis.remediation.permanent_fix.changes}</pre>}
+            {analysis.remediation.permanent_fix?.changes && (
+              <pre style={{ background: "#0d0d1a", border: "1px solid #2a2a3a", borderRadius: 6, padding: 12, color: "#fde68a", fontSize: 11, fontFamily: "'JetBrains Mono', monospace", whiteSpace: "pre-wrap", lineHeight: 1.5, margin: 0, wordBreak: "break-all" }}>
+                {analysis.remediation.permanent_fix.changes}
+              </pre>
+            )}
           </div>
+
           <div style={{ background: "#1a1a2e", border: "1px solid #2a2a3a", borderRadius: 8, padding: 16 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}><span style={{ fontSize: 16 }}>🛡️</span><span style={{ fontWeight: 700, color: "#f0abfc", fontSize: 14 }}>Prevention</span></div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <span style={{ fontSize: 16 }}>🛡️</span>
+              <span style={{ fontWeight: 700, color: "#f0abfc", fontSize: 14 }}>Prevention</span>
+            </div>
             <div style={{ color: "#e2e8f0", fontSize: 13, lineHeight: 1.5 }}>{analysis.remediation.prevention}</div>
           </div>
-          {analysis.timeline_estimate && <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", background: "#1a1a2e", borderRadius: 8, border: "1px solid #2a2a3a" }}><span>⏱️</span><span style={{ color: "#94a3b8", fontSize: 13 }}>Resolution:</span><span style={{ color: "#e2e8f0", fontSize: 13, fontWeight: 600 }}>{analysis.timeline_estimate}</span></div>}
+
+          {analysis.timeline_estimate && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", background: "#1a1a2e", borderRadius: 8, border: "1px solid #2a2a3a" }}>
+              <span>⏱️</span>
+              <span style={{ color: "#94a3b8", fontSize: 13 }}>Resolution:</span>
+              <span style={{ color: "#e2e8f0", fontSize: 13, fontWeight: 600 }}>{analysis.timeline_estimate}</span>
+            </div>
+          )}
         </div>)}
 
-        {tab === "raw" && sel && (<div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {[["Container Logs", "📝", sel.event.logs], ["Kubernetes Events", "📋", sel.event.events], ["Deployment Manifest", "⚙️", sel.event.manifest]].map(([t, ic, d], i) => (
-            <Section key={i} title={t} icon={ic}><pre style={{ background: "#0d0d1a", borderRadius: 6, padding: 12, color: "#e2e8f0", fontSize: 11, fontFamily: "'JetBrains Mono', monospace", overflowX: "auto", margin: 0, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{d}</pre></Section>
-          ))}
-        </div>)}
+        {/* Raw Data tab */}
+        {tab === "raw" && sel && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {[["Container Logs", "📝", sel.event.logs], ["Kubernetes Events", "📋", sel.event.events], ["Deployment Manifest", "⚙️", sel.event.manifest]].map(([t, ic, d], i) => (
+              <Section key={i} title={t} icon={ic}>
+                <pre style={{ background: "#0d0d1a", borderRadius: 6, padding: 12, color: "#e2e8f0", fontSize: 11, fontFamily: "'JetBrains Mono', monospace", overflowX: "auto", margin: 0, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{d}</pre>
+              </Section>
+            ))}
+          </div>
+        )}
       </>)}
 
+      {/* Empty state */}
       {!sel && !loading && (
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "60px 20px", textAlign: "center" }}>
-          <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.5 }}>☸</div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: "#64748b", marginBottom: 4 }}>No incident selected</div>
-          <div style={{ fontSize: 12, color: "#4a4a6a" }}>Select a Kubernetes error above to run AI-powered analysis</div>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "50px 20px", textAlign: "center" }}>
+          <div style={{ fontSize: 40, marginBottom: 16, opacity: 0.4 }}>☸</div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: "#94a3b8", marginBottom: 6 }}>Select an incident above to begin analysis</div>
+          <div style={{ fontSize: 12, color: "#4a4a6a", maxWidth: 360, lineHeight: 1.6 }}>
+            Each scenario shows how AI correlates Datadog monitor alerts, container logs, and K8s events to produce a root cause and decide whether to auto-remediate or escalate to a human.
+          </div>
         </div>
       )}
 
